@@ -91,7 +91,10 @@ ISSUE_TOOLS = [
     ),
     types.Tool(
         name="gitlab_update_issue",
-        description="Update an existing GitLab issue (title, description, labels, assignees, state).",
+        description=(
+            "Update an existing GitLab issue (title, description, labels, assignees, state). "
+            "Use gitlab_create_issue_note after this to log what changed and why."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -129,6 +132,75 @@ ISSUE_TOOLS = [
             "required": ["project_id", "issue_iid"],
         },
     ),
+    types.Tool(
+        name="gitlab_delete_issue",
+        description=(
+            "Permanently delete a GitLab issue. Use when an issue is wrong or unnecessary. "
+            "Requires Owner or Admin role. Prefer gitlab_close_issue if the issue should be "
+            "kept for history."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "issue_iid": {"type": "integer"},
+            },
+            "required": ["project_id", "issue_iid"],
+        },
+    ),
+    types.Tool(
+        name="gitlab_create_issue_note",
+        description="Post a comment on a GitLab issue. Use after updates to log what changed and why.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string"},
+                "issue_iid": {"type": "integer"},
+                "body": {"type": "string", "description": "Comment text (Markdown supported)"},
+            },
+            "required": ["project_id", "issue_iid", "body"],
+        },
+    ),
+    types.Tool(
+        name="gitlab_link_issues",
+        description=(
+            "Create a blocking/related link between two GitLab issues. "
+            "Use link_type='blocks' to express DAG dependencies from decompose-issues: "
+            "issue A blocks issue B means B cannot start until A is done."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project containing the source issue",
+                },
+                "issue_iid": {
+                    "type": "integer",
+                    "description": "IID of the source issue",
+                },
+                "target_project_id": {
+                    "type": "string",
+                    "description": "Project containing the target issue (same as project_id if in same project)",
+                },
+                "target_issue_iid": {
+                    "type": "integer",
+                    "description": "IID of the target issue",
+                },
+                "link_type": {
+                    "type": "string",
+                    "enum": ["relates_to", "blocks", "is_blocked_by"],
+                    "default": "blocks",
+                    "description": (
+                        "'blocks': source blocks target; "
+                        "'is_blocked_by': source is blocked by target; "
+                        "'relates_to': general relation"
+                    ),
+                },
+            },
+            "required": ["project_id", "issue_iid", "target_project_id", "target_issue_iid"],
+        },
+    ),
 ]
 
 
@@ -149,12 +221,9 @@ async def handle_issue_tool(name: str, arguments: dict[str, Any]) -> list[types.
                 "state": arguments.get("state", "opened"),
                 "per_page": arguments.get("per_page", 20),
             }
-            if "labels" in arguments:
-                kwargs["labels"] = arguments["labels"]
-            if "assignee_username" in arguments:
-                kwargs["assignee_username"] = arguments["assignee_username"]
-            if "search" in arguments:
-                kwargs["search"] = arguments["search"]
+            for field in ("labels", "assignee_username", "search"):
+                if field in arguments:
+                    kwargs[field] = arguments[field]
             issues = project.issues.list(**kwargs)
             return _fmt([_issue_summary(i) for i in issues])
 
@@ -190,6 +259,38 @@ async def handle_issue_tool(name: str, arguments: dict[str, Any]) -> list[types.
             issue.state_event = "close"
             issue.save()
             return [types.TextContent(type="text", text=f"Issue #{arguments['issue_iid']} closed.")]
+
+        if name == "gitlab_delete_issue":
+            issue = project.issues.get(arguments["issue_iid"])
+            issue.delete()
+            return [
+                types.TextContent(
+                    type="text", text=f"Issue #{arguments['issue_iid']} permanently deleted."
+                )
+            ]
+
+        if name == "gitlab_create_issue_note":
+            issue = project.issues.get(arguments["issue_iid"])
+            note = issue.notes.create({"body": arguments["body"]})
+            return _fmt({"id": note.id, "author": note.author["username"], "body": note.body})
+
+        if name == "gitlab_link_issues":
+            issue = project.issues.get(arguments["issue_iid"])
+            link = issue.links.create(
+                {
+                    "target_project_id": arguments["target_project_id"],
+                    "target_issue_iid": arguments["target_issue_iid"],
+                    "link_type": arguments.get("link_type", "blocks"),
+                }
+            )
+            return _fmt(
+                {
+                    "source_iid": arguments["issue_iid"],
+                    "target_iid": arguments["target_issue_iid"],
+                    "link_type": arguments.get("link_type", "blocks"),
+                    "link_id": getattr(link, "id", None),
+                }
+            )
 
     except gitlab.exceptions.GitlabError as e:
         return _err(str(e))
