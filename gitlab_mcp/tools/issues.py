@@ -4,7 +4,12 @@ from typing import Any
 import gitlab.exceptions
 import mcp.types as types
 
-from ..client import get_project
+from ..client import get_project, resolve_project_id
+
+_PROJECT_ID_PROP = {
+    "type": "string",
+    "description": "Project ID or path (e.g. 'group/project'). Defaults to GITLAB_PROJECT_ID.",
+}
 
 ISSUE_TOOLS = [
     types.Tool(
@@ -13,10 +18,7 @@ ISSUE_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {
-                    "type": "string",
-                    "description": "Project ID (numeric) or path (e.g. 'group/project')",
-                },
+                "project_id": _PROJECT_ID_PROP,
                 "state": {
                     "type": "string",
                     "enum": ["opened", "closed", "all"],
@@ -41,7 +43,7 @@ ISSUE_TOOLS = [
                     "description": "Number of results per page (max 100)",
                 },
             },
-            "required": ["project_id"],
+            "required": [],
         },
     ),
     types.Tool(
@@ -50,13 +52,13 @@ ISSUE_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "issue_iid": {
                     "type": "integer",
                     "description": "Issue IID (project-scoped issue number)",
                 },
             },
-            "required": ["project_id", "issue_iid"],
+            "required": ["issue_iid"],
         },
     ),
     types.Tool(
@@ -65,7 +67,7 @@ ISSUE_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "title": {"type": "string", "description": "Issue title"},
                 "description": {"type": "string", "description": "Issue description (Markdown)"},
                 "labels": {
@@ -86,7 +88,7 @@ ISSUE_TOOLS = [
                     "description": "Due date in YYYY-MM-DD format",
                 },
             },
-            "required": ["project_id", "title"],
+            "required": ["title"],
         },
     ),
     types.Tool(
@@ -98,7 +100,7 @@ ISSUE_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "issue_iid": {"type": "integer"},
                 "title": {"type": "string"},
                 "description": {"type": "string"},
@@ -117,7 +119,7 @@ ISSUE_TOOLS = [
                     "description": "Replace assignees with this list (empty list clears assignees)",
                 },
             },
-            "required": ["project_id", "issue_iid"],
+            "required": ["issue_iid"],
         },
     ),
     types.Tool(
@@ -126,10 +128,10 @@ ISSUE_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "issue_iid": {"type": "integer"},
             },
-            "required": ["project_id", "issue_iid"],
+            "required": ["issue_iid"],
         },
     ),
     types.Tool(
@@ -142,10 +144,10 @@ ISSUE_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "issue_iid": {"type": "integer"},
             },
-            "required": ["project_id", "issue_iid"],
+            "required": ["issue_iid"],
         },
     ),
     types.Tool(
@@ -154,11 +156,11 @@ ISSUE_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "issue_iid": {"type": "integer"},
                 "body": {"type": "string", "description": "Comment text (Markdown supported)"},
             },
-            "required": ["project_id", "issue_iid", "body"],
+            "required": ["issue_iid", "body"],
         },
     ),
     types.Tool(
@@ -173,7 +175,7 @@ ISSUE_TOOLS = [
             "properties": {
                 "project_id": {
                     "type": "string",
-                    "description": "Project containing the source issue",
+                    "description": "Project containing the source issue. Defaults to GITLAB_PROJECT_ID.",
                 },
                 "issue_iid": {
                     "type": "integer",
@@ -181,7 +183,7 @@ ISSUE_TOOLS = [
                 },
                 "target_project_id": {
                     "type": "string",
-                    "description": "Project containing the target issue (same as project_id if in same project)",
+                    "description": "Project containing the target issue. Defaults to source project_id.",
                 },
                 "target_issue_iid": {
                     "type": "integer",
@@ -198,7 +200,7 @@ ISSUE_TOOLS = [
                     ),
                 },
             },
-            "required": ["project_id", "issue_iid", "target_project_id", "target_issue_iid"],
+            "required": ["issue_iid", "target_issue_iid"],
         },
     ),
 ]
@@ -214,7 +216,7 @@ def _err(msg: str) -> list[types.TextContent]:
 
 async def handle_issue_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
     try:
-        project = get_project(arguments["project_id"])
+        project = get_project(resolve_project_id(arguments))
 
         if name == "gitlab_list_issues":
             kwargs: dict[str, Any] = {
@@ -276,9 +278,10 @@ async def handle_issue_tool(name: str, arguments: dict[str, Any]) -> list[types.
 
         if name == "gitlab_link_issues":
             issue = project.issues.get(arguments["issue_iid"])
+            target_project_id = arguments.get("target_project_id") or resolve_project_id(arguments)
             link = issue.links.create(
                 {
-                    "target_project_id": arguments["target_project_id"],
+                    "target_project_id": target_project_id,
                     "target_issue_iid": arguments["target_issue_iid"],
                     "link_type": arguments.get("link_type", "blocks"),
                 }
