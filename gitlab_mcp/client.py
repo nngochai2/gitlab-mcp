@@ -19,3 +19,12 @@ def get_gitlab() -> gitlab.Gitlab:
 
 def get_project(project_id: str | int) -> Any:
     return get_gitlab().projects.get(project_id)
+
+
+def resolve_project_id(arguments: dict) -> str | int:
+    project_id = arguments.get("project_id") or os.environ.get("GITLAB_PROJECT_ID")
+    if not project_id:
+        raise ValueError(
+            "project_id is required (set it in the tool call or via GITLAB_PROJECT_ID)"
+        )
+    return project_id
