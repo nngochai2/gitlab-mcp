@@ -4,7 +4,12 @@ from typing import Any
 import gitlab.exceptions
 import mcp.types as types
 
-from ..client import get_project
+from ..client import get_gitlab, get_project, resolve_project_id
+
+_PROJECT_ID_PROP = {
+    "type": "string",
+    "description": "Project ID or path (e.g. 'group/project'). Defaults to GITLAB_PROJECT_ID.",
+}
 
 MR_TOOLS = [
     types.Tool(
@@ -13,7 +18,7 @@ MR_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "state": {
                     "type": "string",
                     "enum": ["opened", "closed", "merged", "locked", "all"],
@@ -25,7 +30,7 @@ MR_TOOLS = [
                 "search": {"type": "string", "description": "Search term for title"},
                 "per_page": {"type": "integer", "default": 20},
             },
-            "required": ["project_id"],
+            "required": [],
         },
     ),
     types.Tool(
@@ -34,13 +39,13 @@ MR_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "mr_iid": {
                     "type": "integer",
                     "description": "Merge request IID (project-scoped number)",
                 },
             },
-            "required": ["project_id", "mr_iid"],
+            "required": ["mr_iid"],
         },
     ),
     types.Tool(
@@ -49,10 +54,10 @@ MR_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "mr_iid": {"type": "integer"},
             },
-            "required": ["project_id", "mr_iid"],
+            "required": ["mr_iid"],
         },
     ),
     types.Tool(
@@ -61,10 +66,10 @@ MR_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "mr_iid": {"type": "integer"},
             },
-            "required": ["project_id", "mr_iid"],
+            "required": ["mr_iid"],
         },
     ),
     types.Tool(
@@ -73,11 +78,11 @@ MR_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "mr_iid": {"type": "integer"},
                 "body": {"type": "string", "description": "Comment text (Markdown supported)"},
             },
-            "required": ["project_id", "mr_iid", "body"],
+            "required": ["mr_iid", "body"],
         },
     ),
     types.Tool(
@@ -86,10 +91,10 @@ MR_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "mr_iid": {"type": "integer"},
             },
-            "required": ["project_id", "mr_iid"],
+            "required": ["mr_iid"],
         },
     ),
     types.Tool(
@@ -98,7 +103,7 @@ MR_TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "project_id": {"type": "string"},
+                "project_id": _PROJECT_ID_PROP,
                 "mr_iid": {"type": "integer"},
                 "merge_commit_message": {"type": "string"},
                 "squash": {
@@ -112,7 +117,7 @@ MR_TOOLS = [
                     "description": "Delete source branch after merge",
                 },
             },
-            "required": ["project_id", "mr_iid"],
+            "required": ["mr_iid"],
         },
     ),
 ]
@@ -126,9 +131,23 @@ def _err(msg: str) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=f"Error: {msg}")]
 
 
+def _check_mr_owner(mr: Any, mr_iid: int) -> list[types.TextContent] | None:
+    """Return an error if the MR was not authored by the authenticated token owner."""
+    gl = get_gitlab()
+    gl.auth()
+    current = gl.user.username
+    author = (mr.author or {}).get("username")
+    if author != current:
+        return _err(
+            f"MR !{mr_iid} was authored by '{author}', not '{current}'. "
+            "Approve and merge are restricted to MRs you own."
+        )
+    return None
+
+
 async def handle_mr_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
     try:
-        project = get_project(arguments["project_id"])
+        project = get_project(resolve_project_id(arguments))
 
         if name == "gitlab_list_merge_requests":
             kwargs: dict[str, Any] = {
@@ -182,6 +201,9 @@ async def handle_mr_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
 
         if name == "gitlab_approve_merge_request":
             mr = project.mergerequests.get(arguments["mr_iid"])
+            err = _check_mr_owner(mr, arguments["mr_iid"])
+            if err:
+                return err
             mr.approve()
             return [
                 types.TextContent(
@@ -191,6 +213,9 @@ async def handle_mr_tool(name: str, arguments: dict[str, Any]) -> list[types.Tex
 
         if name == "gitlab_merge_merge_request":
             mr = project.mergerequests.get(arguments["mr_iid"])
+            err = _check_mr_owner(mr, arguments["mr_iid"])
+            if err:
+                return err
             kwargs = {}
             if "merge_commit_message" in arguments:
                 kwargs["merge_commit_message"] = arguments["merge_commit_message"]
